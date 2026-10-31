@@ -17,8 +17,13 @@ jobs:
         config:
           - name: Windows
             os: windows-latest
+            target: ''
           - name: macOS
             os: macos-latest
+            target: ''
+          - name: Android64
+            os: ubuntu-latest
+            target: Android64
 
     name: ${{ matrix.config.name }}
     runs-on: ${{ matrix.config.os }}
@@ -26,16 +31,25 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Build the mod
+      - name: Build desktop mod
+        if: matrix.config.target == ''
         uses: geode-sdk/build-geode-mod@main
         with:
           sdk: given
           combine: true
 
+      - name: Build Android mod
+        if: matrix.config.target == 'Android64'
+        uses: geode-sdk/build-geode-mod@main
+        with:
+          sdk: given
+          target: Android64
+          combine: true
+
   package:
     name: Package builds
     runs-on: ubuntu-latest
-    needs: ['build']
+    needs: [build]
 
     steps:
       - uses: geode-sdk/build-geode-mod/combine@main

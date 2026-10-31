@@ -388,10 +388,13 @@ namespace {
         Windows,
         Linux,
         Mac,
+        Android,
     };
 
     HostOS hostOS() {
-#ifdef GEODE_IS_MACOS
+#if defined(__ANDROID__)
+        return HostOS::Android;
+#elif defined(GEODE_IS_MACOS)
         return HostOS::Mac;
 #else
         static HostOS const hostOperatingSystem = geode::utils::platform::isWine() ? HostOS::Linux : HostOS::Windows;
@@ -403,6 +406,7 @@ namespace {
         switch (hostOS()) {
             case HostOS::Linux: return "linux";
             case HostOS::Mac: return "macos";
+            case HostOS::Android: return "android";
             default: return "windows";
         }
     }
@@ -411,6 +415,7 @@ namespace {
         switch (hostOS()) {
             case HostOS::Linux: return "proton/wine";
             case HostOS::Mac: return "native";
+            case HostOS::Android: return "native";
             default: return "native";
         }
     }
@@ -1046,6 +1051,10 @@ finally {
 #endif
 
     void removeLegacyTerminalLogs() {
+#if defined(__ANDROID__)
+        // Android has no desktop terminal runtime or legacy log files to clean up.
+        return;
+#else
         if (hostOS() == HostOS::Mac) {
             return;
         }
@@ -1065,6 +1074,7 @@ finally {
             std::error_code errorCode;
             std::filesystem::remove(legacyRuntimeDirectory / fileName, errorCode);
         }
+#endif
     }
 
 #ifdef _WIN32
@@ -1077,6 +1087,10 @@ finally {
 #endif
 
     void resetTerminalLog() {
+#if defined(__ANDROID__)
+        // Android writes diagnostics to Geode's log and has no external terminal helper.
+        return;
+#else
         writeTerminalFlags();
         if (hostOS() == HostOS::Linux) {
             ensureWineRuntimeDir();
@@ -1126,9 +1140,14 @@ finally {
         }
 
         writeTerminalScript();
+#endif
     }
 
     void appendTerminalLog(std::string const& message) {
+#if defined(__ANDROID__)
+        log::info("[afterflow] {}", message);
+        return;
+#endif
         if (hostOS() == HostOS::Linux || hostOS() == HostOS::Mac) {
             std::ofstream outputFile(terminalLogPath(), std::ios::app);
             if (outputFile) {
@@ -1208,6 +1227,12 @@ finally {
             return false;
         }
 
+#if defined(__ANDROID__)
+        auto contentText = std::string(
+            "Tap the AF button near the top-left of the gameplay screen to cycle prediction stages.\n\n"
+            "The desktop terminal is unavailable on Android; diagnostic messages are written to Geode's log."
+        );
+#else
         auto contentText = fmt::format(
             "Afterflow uses Geode keybinds, so both controls can be changed.\n\n"
             "{}  cycle stage\n{}  terminal\n\n"
@@ -1215,6 +1240,7 @@ finally {
             stageKey(),
             terminalKey()
         );
+#endif
         createQuickPopup(
             "Afterflow keybinds",
             contentText,
@@ -1233,6 +1259,10 @@ finally {
     }
 
     void setupKeybinds() {
+#if defined(__ANDROID__)
+        // Android stage changes are handled by the in-game AF touch button.
+        return;
+#else
         listenForKeybindSettingPresses(KEYBIND_STAGE, [](Keybind const&, bool isDown, bool isRepeat, double) {
             if (isDown && !isRepeat) {
                 cycleStage(1);
@@ -1245,6 +1275,7 @@ finally {
             }
             return true;
         });
+#endif
     }
 
     constexpr char const* VERSION_URL =
@@ -1657,6 +1688,10 @@ finally {
     }
 
     void toggleTerminal() {
+#if defined(__ANDROID__)
+        log::info("terminal is unavailable on Android; use the Geode log instead");
+        return;
+#else
         if (!isTerminalEnabled()) {
             log::info("terminal toggle ignored (disabled)");
             return;
@@ -1731,6 +1766,7 @@ finally {
         log::warn("terminal is not available on this platform");
 #endif
     }
+#endif
 
     bool isGhost(PlayerObject* playerObject) {
         return playerObject && (playerObject == state.ghostPlayer1 || playerObject == state.ghostPlayer2);
@@ -3106,6 +3142,10 @@ finally {
     }
 
     void startCycleWatcher() {
+#if defined(__ANDROID__)
+        // Android uses the in-game touch control; no desktop trigger-file watcher is needed.
+        return;
+#else
         std::error_code errorCode;
         std::filesystem::remove(cycleTriggerPath(), errorCode);
         try {
@@ -3128,6 +3168,8 @@ finally {
             log::warn("could not start cycle watcher");
         }
     }
+
+#endif
 
     void deliverPending(PlayLayer* gameLayer, PlayerObject* playerObject) {
         if (gameLayer->m_isPaused) {
@@ -3189,15 +3231,22 @@ $on_mod(Loaded) {
     resetTerminalLog();
     startCycleWatcher();
     setupKeybinds();
+#if !defined(__ANDROID__)
     listenForSettingChanges<bool>("terminal-enabled", [](bool enabled) {
         writeTerminalFlags();
         if (!enabled) {
             closeTerminal();
         }
     });
+#endif
     say("starting mode: {}", stageBanner());
+#if defined(__ANDROID__)
+    say("tap the AF button in gameplay to cycle prediction stages");
+    say("desktop terminal disabled; diagnostics are written to Geode's log");
+#else
     say("{} cycles anywhere: 2/2 -> 4/4 -> 8/8 -> 16/8 -> 24/12 -> 32/16 -> 40/20 -> off", stageKey());
     say("{} toggles the terminal", terminalKey());
+#endif
     say("host os: {} ({})", hostOSName(), hostOSDescription());
     checkForUpdates(true);
 }
@@ -3249,8 +3298,33 @@ class $modify(BufPlayLayer, PlayLayer) {
         state.wasAutoReleased = false;
         forgetPress();
         resetPending();
+#if defined(__ANDROID__)
+        // A small, dedicated touch target replaces the desktop F6 keybind on phones/tablets.
+        auto* stageLabel = CCLabelBMFont::create("AF", "bigFont.fnt");
+        if (stageLabel) {
+            auto* stageButton = CCMenuItemLabel::create(
+                stageLabel, this, menu_selector(BufPlayLayer::onAfterflowTouchCycle)
+            );
+            if (stageButton) {
+                auto* touchMenu = CCMenu::createWithItem(stageButton);
+                if (touchMenu) {
+                    auto winSize = CCDirector::sharedDirector()->getWinSize();
+                    touchMenu->setPosition({ 0.f, 0.f });
+                    stageButton->setPosition({ 34.f, winSize.height - 42.f });
+                    stageButton->setScale(0.65f);
+                    this->addChild(touchMenu, 10000);
+                }
+            }
+        }
+#endif
         return true;
     }
+
+#if defined(__ANDROID__)
+    void onAfterflowTouchCycle(CCObject*) {
+        cycleStage(1);
+    }
+#endif
 
     void onQuit() {
         resetPending();
